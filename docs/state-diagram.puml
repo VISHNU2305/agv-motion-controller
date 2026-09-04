@@ -1,0 +1,37 @@
+@startuml AGV_State_Machine
+
+[*] --> IDLE
+
+IDLE --> PATH_PLANNING : requestStart()
+PATH_PLANNING --> MOVING : path computed
+
+MOVING --> OBSTACLE_DETECTED : distance <= 15cm
+MOVING --> DOCKED : reached target position
+
+OBSTACLE_DETECTED --> REROUTING : assessment complete (0.3s)
+
+REROUTING --> MOVING : maneuver complete
+
+IDLE --> ERROR : fault detected
+PATH_PLANNING --> ERROR : fault detected
+MOVING --> ERROR : fault detected
+OBSTACLE_DETECTED --> ERROR : fault detected
+REROUTING --> ERROR : fault detected
+
+DOCKED --> [*]
+ERROR --> [*]
+
+note right of REROUTING
+  Backs up (0.8s), then
+  turns to bypass obstacle
+  (1.2s), then resumes
+end note
+
+note right of ERROR
+  Reachable from any state.
+  Requires supervisor
+  reset/acknowledge to exit
+  (not yet implemented).
+end note
+
+@enduml

@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AGV Motion Controller — Live Production Site Demo (WASM)</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #05070a; font-family: 'Segoe UI', Arial, sans-serif; }
+
+  #hud {
+    position: absolute; top: 20px; left: 20px; z-index: 10;
+    color: #e6f0ff; background: linear-gradient(160deg, rgba(14,20,28,0.88), rgba(10,14,20,0.88));
+    padding: 16px 20px; border-radius: 10px; border: 1px solid rgba(127,208,255,0.25);
+    min-width: 270px; backdrop-filter: blur(6px);
+    box-shadow: 0 8px 30px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04);
+  }
+  #hud .accent { height: 3px; width: 100%; background: linear-gradient(90deg, #33cc66, #7fd0ff, #cc66ff); border-radius: 2px; margin-bottom: 12px; }
+  #hud h1 { font-size: 13px; margin: 0 0 12px 0; color: #7fd0ff; letter-spacing: 1.2px; font-weight: 600; }
+  #hud .row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; margin: 7px 0; }
+  #hud .row span:first-child { color: #7c8ba0; letter-spacing: 0.3px; }
+  #hud .row span:last-child { font-variant-numeric: tabular-nums; font-weight: 500; }
+  #state-badge { display: inline-block; padding: 3px 12px; border-radius: 20px; font-weight: 700; font-size: 11px; letter-spacing: 0.6px; }
+  #engine-tag { font-size: 10.5px; color: #55dd88; margin-top: 10px; letter-spacing: 0.4px; }
+
+  #controls {
+    position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%); z-index: 10;
+    display: flex; gap: 12px; align-items: center;
+  }
+  .btn {
+    padding: 12px 26px; border-radius: 8px; border: 1px solid rgba(127,208,255,0.3);
+    background: linear-gradient(160deg, rgba(20,28,38,0.92), rgba(12,18,26,0.92));
+    color: #e6f0ff; font-size: 13px; font-weight: 600; letter-spacing: 0.5px; cursor: pointer;
+    backdrop-filter: blur(6px); transition: all 0.15s ease;
+  }
+  .btn:hover:not(:disabled) { border-color: #7fd0ff; box-shadow: 0 0 16px rgba(127,208,255,0.25); }
+  .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .btn.reset { border-color: rgba(255,120,120,0.3); }
+  .btn.reset:hover { border-color: #ff7878; box-shadow: 0 0 16px rgba(255,120,120,0.25); }
+
+  #instruction {
+    position: absolute; top: 20px; right: 20px; z-index: 10;
+    color: #7fd0ff; background: rgba(14,20,28,0.85); padding: 12px 18px; border-radius: 10px;
+    border: 1px solid rgba(127,208,255,0.25); font-size: 12.5px; max-width: 260px; line-height: 1.5;
+    backdrop-filter: blur(6px);
+  }
+  #instruction b { color: #ffcc55; }
+
+  #title-bar {
+    position: absolute; bottom: 22px; right: 24px; z-index: 10;
+    color: #3a4a5e; font-size: 10.5px; letter-spacing: 1px; text-align: right;
+  }
+  #loading-wasm {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    color: #7fd0ff; font-size: 13px; z-index: 30; letter-spacing: 0.5px;
+    background: rgba(10,14,20,0.9); padding: 14px 22px; border-radius: 8px;
+    border: 1px solid rgba(127,208,255,0.3);
+  }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div class="accent"></div>
+  <h1>AGV MOTION CONTROLLER — LIVE DEMO</h1>
+  <div class="row"><span>State</span><span id="state-badge">IDLE</span></div>
+  <div class="row"><span>Sim Time</span><span id="hud-time">0.00 s</span></div>
+  <div class="row"><span>Position</span><span id="hud-pos">0.0 cm</span></div>
+  <div class="row"><span>Velocity</span><span id="hud-vel">0.0 cm/s</span></div>
+  <div class="row"><span>Distance Ahead</span><span id="hud-dist">-- cm</span></div>
+  <div class="row"><span>Obstacles Placed</span><span id="hud-obstacles">0</span></div>
+  <div id="engine-tag">● Engine: compiled C++ (WebAssembly)</div>
+</div>
+
+<div id="instruction">
+  <b>1.</b> Click START to load goods onto the AGV.<br>
+  <b>2.</b> Click RUN to dispatch it toward the dock.<br>
+  <b>3.</b> While it's MOVING, click anywhere on the track ahead of it to drop an obstacle live — the compiled C++ state machine detects it, stops, curves around it (alternating sides), and resumes automatically.
+</div>
+
+<div id="controls">
+  <button class="btn" id="btn-start">▶ START — Load Goods</button>
+  <button class="btn" id="btn-run" disabled>🚀 RUN</button>
+  <button class="btn reset" id="btn-reset">🔄 RESET</button>
+</div>
+
+<div id="title-bar">MURATA MACHINERY — PORTFOLIO PROJECT<br>C++ Control Logic Compiled to WebAssembly</div>
+
+<div id="loading-wasm">Loading compiled C++ module (WebAssembly)...</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="agv.js"></script>
+<script>
+// =================================================================
+// SCENE SETUP
+// =================================================================
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x05070a);
+scene.fog = new THREE.Fog(0x05070a, 45, 150);
+
+const camera = new THREE.PerspectiveCamera(48, window.innerWidth / window.innerHeight, 0.1, 500);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+document.body.appendChild(renderer.domElement);
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+scene.add(new THREE.AmbientLight(0x8899aa, 0.55));
+const sun = new THREE.DirectionalLight(0xfff2e0, 1.0);
+sun.position.set(30, 55, 20);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -60; sun.shadow.camera.right = 60;
+sun.shadow.camera.top = 60; sun.shadow.camera.bottom = -60;
+scene.add(sun);
+scene.add(new THREE.DirectionalLight(0x4488ff, 0.35));
+
+function makeStripeTexture() {
+  const c = document.createElement('canvas');
+  c.width = 128; c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#1a1a1a'; ctx.fillRect(0, 0, 128, 128);
+  ctx.fillStyle = '#ffcc00';
+  for (let i = -128; i < 256; i += 32) {
+    ctx.save(); ctx.translate(i, 0); ctx.rotate(Math.PI / 4); ctx.fillRect(0, 0, 16, 220); ctx.restore();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+const stripeTexture = makeStripeTexture();
+
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(220, 110),
+  new THREE.MeshStandardMaterial({ color: 0x11161e, roughness: 0.75, metalness: 0.15 })
+);
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+scene.add(floor);
+scene.add(new THREE.GridHelper(220, 44, 0x22344a, 0x151f2c));
+
+// =================================================================
+// TRACK
+// =================================================================
+const SCALE = 0.1;
+const TRACK_LENGTH_CM = 500;
+
+const rail = new THREE.Mesh(
+  new THREE.BoxGeometry(TRACK_LENGTH_CM * SCALE, 0.15, 1.2),
+  new THREE.MeshStandardMaterial({ color: 0x3a4a5a, metalness: 0.7, roughness: 0.3 })
+);
+rail.position.set(TRACK_LENGTH_CM * SCALE / 2, 0.08, 0);
+rail.castShadow = true; rail.receiveShadow = true;
+scene.add(rail);
+
+[-1.8, 1.8].forEach(zOff => {
+  const lane = new THREE.Mesh(
+    new THREE.BoxGeometry(TRACK_LENGTH_CM * SCALE, 0.02, 1.2),
+    new THREE.MeshStandardMaterial({ color: 0x1c2733, transparent: true, opacity: 0.5 })
+  );
+  lane.position.set(TRACK_LENGTH_CM * SCALE / 2, 0.01, zOff);
+  scene.add(lane);
+});
+
+function buildDock(positionCm) {
+  const group = new THREE.Group();
+  const platform = new THREE.Mesh(
+    new THREE.BoxGeometry(2.2, 0.35, 3.2),
+    new THREE.MeshStandardMaterial({ color: 0x2a3a4a, metalness: 0.4, roughness: 0.5 })
+  );
+  platform.position.y = 0.175;
+  platform.castShadow = true; platform.receiveShadow = true;
+  group.add(platform);
+  const edge = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.37, 3.2), new THREE.MeshStandardMaterial({ map: stripeTexture }));
+  edge.position.set(1.1, 0.18, 0);
+  group.add(edge);
+  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 10), new THREE.MeshStandardMaterial({ color: 0x44ddff, emissive: 0x44ddff, emissiveIntensity: 0.8 }));
+  beacon.position.set(0, 2.2, 0);
+  group.add(beacon);
+  group.userData.beacon = beacon;
+  group.position.set(positionCm * SCALE, 0, 0);
+  scene.add(group);
+}
+buildDock(TRACK_LENGTH_CM);
+
+const goodsMeshes = [];
+for (let i = 0; i < 3; i++) {
+  const box = new THREE.Mesh(
+    new THREE.BoxGeometry(0.6, 0.5, 0.6),
+    new THREE.MeshStandardMaterial({ color: 0x8a5a35, roughness: 0.8 })
+  );
+  box.position.set(-4, 0.25 + i * 0.55, 0.8);
+  box.castShadow = true;
+  scene.add(box);
+  goodsMeshes.push(box);
+}
+
+const agv = new THREE.Group();
+const bodyMat = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.35, roughness: 0.4 });
+const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.45, 0.9), bodyMat);
+body.position.y = 0.42;
+body.castShadow = true;
+agv.add(body);
+const deckLip = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.06, 1.0), new THREE.MeshStandardMaterial({ color: 0x1a1a1a }));
+deckLip.position.y = 0.66;
+agv.add(deckLip);
+const statusBeacon = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 12), new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 1 }));
+statusBeacon.position.set(0, 0.78, 0);
+agv.add(statusBeacon);
+const wheels = [];
+[[-0.55, 0.5], [0.55, 0.5], [-0.55, -0.5], [0.55, -0.5]].forEach(([x, z]) => {
+  const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.15, 16), new THREE.MeshStandardMaterial({ color: 0x1a1a1a }));
+  wheel.rotation.z = Math.PI / 2;
+  wheel.position.set(x, 0.2, z);
+  wheel.castShadow = true;
+  agv.add(wheel);
+  wheels.push(wheel);
+});
+agv.position.set(-4, 0, 0);
+scene.add(agv);
+
+function buildTruck(x, z, color) {
+  const truck = new THREE.Group();
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.4, 1.6), new THREE.MeshStandardMaterial({ color }));
+  cab.position.set(1.4, 0.9, 0); cab.castShadow = true; truck.add(cab);
+  const trailer = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.6, 1.7), new THREE.MeshStandardMaterial({ color: 0x2c333d }));
+  trailer.position.set(-1.3, 1.0, 0); trailer.castShadow = true; truck.add(trailer);
+  [[1.4,0.8],[1.4,-0.8],[-2.4,0.8],[-2.4,-0.8],[-0.3,0.8],[-0.3,-0.8]].forEach(([tx,tz]) => {
+    const w = new THREE.Mesh(new THREE.CylinderGeometry(0.35,0.35,0.3,16), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+    w.rotation.x = Math.PI/2; w.position.set(tx,0.35,tz); truck.add(w);
+  });
+  truck.position.set(x, 0, z);
+  scene.add(truck);
+}
+buildTruck(10, -12, 0xdd8822);
+buildTruck(25, -12, 0x3388dd);
+
+function buildRack(x, z) {
+  const rack = new THREE.Group();
+  const postMat = new THREE.MeshStandardMaterial({ color: 0xdd6622, metalness: 0.5, roughness: 0.5 });
+  [[-1.5,-0.5],[1.5,-0.5],[-1.5,0.5],[1.5,0.5]].forEach(([px,pz]) => {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.1,4,0.1), postMat);
+    post.position.set(px,2,pz); post.castShadow = true; rack.add(post);
+  });
+  [1.0,2.0,3.0].forEach(h => {
+    const shelf = new THREE.Mesh(new THREE.BoxGeometry(3.2,0.08,1.1), new THREE.MeshStandardMaterial({ color: 0x445566 }));
+    shelf.position.set(0,h,0); shelf.receiveShadow = true; rack.add(shelf);
+    const box = new THREE.Mesh(new THREE.BoxGeometry(0.8,0.6,0.8), new THREE.MeshStandardMaterial({ color: 0x8a5a35 }));
+    box.position.set((Math.random()-0.5)*1.5, h+0.34, 0); box.castShadow = true; rack.add(box);
+  });
+  rack.position.set(x, 0, z);
+  scene.add(rack);
+}
+buildRack(38, -14);
+buildRack(44, -14);
+
+const craneGroup = new THREE.Group();
+const tower = new THREE.Mesh(new THREE.CylinderGeometry(0.4,0.5,12,12), new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.5, roughness: 0.4 }));
+tower.position.set(0,6,0); tower.castShadow = true; craneGroup.add(tower);
+const armPivot = new THREE.Group();
+armPivot.position.set(0,11.5,0);
+const arm = new THREE.Mesh(new THREE.BoxGeometry(14,0.4,0.4), new THREE.MeshStandardMaterial({ color: 0xffaa00 }));
+arm.position.set(6,0,0); arm.castShadow = true; armPivot.add(arm);
+craneGroup.add(armPivot);
+const hook = new THREE.Mesh(new THREE.SphereGeometry(0.25,12,12), new THREE.MeshStandardMaterial({ color: 0x333333 }));
+craneGroup.add(hook);
+craneGroup.position.set(42, 0, -6);
+scene.add(craneGroup);
+
+// =================================================================
+// OBSTACLE VISUALS (order-matched with C++ addObstacle() calls)
+// =================================================================
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+const clickPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+let obstacleVisuals = []; // { cm, group } -- purely visual; C++ owns the real obstacle list
+
+function buildCrateObstacle(positionCm) {
+  const group = new THREE.Group();
+  const woodMat = new THREE.MeshStandardMaterial({ color: 0x8a5a35, roughness: 0.85 });
+  const crateBig = new THREE.Mesh(new THREE.BoxGeometry(1.3, 1.1, 1.3), woodMat);
+  crateBig.position.y = 0.55; crateBig.castShadow = true; crateBig.receiveShadow = true;
+  group.add(crateBig);
+  const crateSmall = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.7, 0.9), woodMat);
+  crateSmall.position.set(0.15, 1.45, 0.1); crateSmall.rotation.y = 0.3; crateSmall.castShadow = true;
+  group.add(crateSmall);
+  const band = new THREE.Mesh(new THREE.BoxGeometry(1.34, 0.22, 1.34), new THREE.MeshStandardMaterial({ map: stripeTexture, roughness: 0.6 }));
+  band.position.y = 1.02;
+  group.add(band);
+  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 10), new THREE.MeshStandardMaterial({ color: 0xff3333, emissive: 0xff2222, emissiveIntensity: 1 }));
+  beacon.position.set(0.15, 1.95, 0.1);
+  group.add(beacon);
+  group.userData.beacon = beacon;
+  group.position.set(positionCm * SCALE, 0, 0);
+  group.scale.set(0.01, 0.01, 0.01);
+  scene.add(group);
+  return group;
+}
+
+// =================================================================
+// LOAD THE COMPILED C++ MODULE (WebAssembly)
+// =================================================================
+let controller = null;
+let moduleReady = false;
+
+createAGVModule().then((Module) => {
+  controller = new Module.LiveController(TRACK_LENGTH_CM);
+  moduleReady = true;
+  document.getElementById('loading-wasm').style.display = 'none';
+  console.log('Compiled C++ LiveController loaded via WebAssembly.');
+}).catch((err) => {
+  document.getElementById('loading-wasm').innerText = 'Failed to load agv.wasm — check console (F12).';
+  console.error(err);
+});
+
+renderer.domElement.addEventListener('click', (event) => {
+  if (!moduleReady || dashboardPhase !== 'RUNNING') return;
+  if (controller.getStateName() !== 'MOVING') return;
+
+  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+  const hit = new THREE.Vector3();
+  if (!raycaster.ray.intersectPlane(clickPlane, hit)) return;
+
+  const clickedCm = hit.x / SCALE;
+  const minCm = controller.getPositionCm() + 60;
+  const maxCm = TRACK_LENGTH_CM - 20;
+  if (clickedCm < minCm || clickedCm > maxCm) return;
+
+  controller.addObstacle(clickedCm); // <-- real compiled C++ call
+  const group = buildCrateObstacle(clickedCm);
+  obstacleVisuals.push({ cm: clickedCm, group });
+  document.getElementById('hud-obstacles').innerText = obstacleVisuals.length;
+});
+
+// =================================================================
+// DASHBOARD-SIDE PHASE (goods loading is presentation-only, not
+// part of the compiled control logic -- the real C++ state machine
+// only begins once RUN triggers controller.requestStart())
+// =================================================================
+let dashboardPhase = 'IDLE'; // IDLE -> GOODS_LOADING -> READY -> RUNNING
+
+const btnStart = document.getElementById('btn-start');
+const btnRun = document.getElementById('btn-run');
+const btnReset = document.getElementById('btn-reset');
+
+btnStart.addEventListener('click', () => {
+  if (dashboardPhase !== 'IDLE' || !moduleReady) return;
+  dashboardPhase = 'GOODS_LOADING';
+  btnStart.disabled = true;
+
+  let i = 0;
+  const loadNext = () => {
+    if (i >= goodsMeshes.length) {
+      dashboardPhase = 'READY';
+      btnRun.disabled = false;
+      return;
+    }
+    const box = goodsMeshes[i];
+    const startPos = box.position.clone();
+    const endPos = new THREE.Vector3(agv.position.x - 0.4 + i * 0.4, 0.9, 0);
+    const duration = 500;
+    const t0 = performance.now();
+    function animateBox(now) {
+      const t = Math.min((now - t0) / duration, 1);
+      box.position.lerpVectors(startPos, endPos, t);
+      box.position.y += Math.sin(t * Math.PI) * 0.5;
+      if (t < 1) requestAnimationFrame(animateBox);
+      else { agv.add(box); box.position.set(-0.4 + i * 0.4, 0.5, 0); i++; setTimeout(loadNext, 150); }
+    }
+    requestAnimationFrame(animateBox);
+  };
+  loadNext();
+});
+
+btnRun.addEventListener('click', () => {
+  if (dashboardPhase !== 'READY' || !moduleReady) return;
+  btnRun.disabled = true;
+  controller.requestStart(); // <-- hands off to the real compiled C++ state machine
+  dashboardPhase = 'RUNNING';
+});
+
+btnReset.addEventListener('click', () => window.location.reload());
+
+// =================================================================
+// ANIMATION LOOP
+// =================================================================
+const stateColors = {
+  IDLE: '#888888', GOODS_LOADING: '#ffcc55', READY: '#7fd0ff', PATH_PLANNING: '#ffaa33',
+  MOVING: '#33cc66', OBSTACLE_DETECTED: '#ff4444', REROUTING: '#cc66ff', DOCKED: '#44ddff', ERROR: '#ff0000'
+};
+
+// Visual-only curve shaping constants -- these must stay in sync with the
+// ZONE_HALF_WIDTH_CM / peak offset used in LiveController.cpp for the curve
+// to look continuous with where C++ actually starts/ends the reroute zone.
+const ZONE_HALF_WIDTH_CM = 45;
+const LATERAL_OFFSET = 1.7;
+
+function lateralOffsetForActiveObstacle(activeCm, positionCm, sign) {
+  if (activeCm < 0 || sign === 0) return 0;
+  const rel = positionCm - activeCm;
+  if (rel < -ZONE_HALF_WIDTH_CM || rel > ZONE_HALF_WIDTH_CM) return 0;
+  const t = (rel + ZONE_HALF_WIDTH_CM) / (2 * ZONE_HALF_WIDTH_CM);
+  return sign * LATERAL_OFFSET * Math.sin(Math.PI * t);
+}
+
+let camAngle = 0.6;
+const clock = new THREE.Clock();
+let prevAgvZ = 0;
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  camAngle += dt * 0.05;
+  const radius = 34;
+  camera.position.set(25 + Math.cos(camAngle) * radius, 18 + Math.sin(camAngle * 0.4) * 3, Math.sin(camAngle) * radius);
+  camera.lookAt(25, 2, 0);
+
+  armPivot.rotation.y = Math.sin(clock.elapsedTime * 0.15) * 0.6;
+  hook.position.set(Math.cos(armPivot.rotation.y) * 6, 6 + Math.sin(clock.elapsedTime * 0.8) * 1.5, Math.sin(armPivot.rotation.y) * 6);
+
+  scene.traverse(obj => {
+    if (obj.userData && obj.userData.beacon) {
+      obj.userData.beacon.material.emissiveIntensity = 0.4 + Math.abs(Math.sin(clock.elapsedTime * 4)) * 0.9;
+    }
+  });
+  obstacleVisuals.forEach(o => {
+    if (o.group.scale.x < 1) {
+      const s = Math.min(o.group.scale.x + dt * 4, 1);
+      o.group.scale.set(s, s, s);
+    }
+  });
+
+  let badgeText = dashboardPhase;
+  let posCm = -4;
+
+  if (moduleReady && dashboardPhase === 'RUNNING') {
+    controller.update(dt); // <-- advances the REAL compiled C++ state machine
+
+    badgeText = controller.getStateName();
+    posCm = controller.getPositionCm();
+
+    agv.position.x = posCm * SCALE;
+
+    const activeCm = controller.getActiveObstacleCm();
+    const sign = controller.getBypassSign();
+    const newZ = lateralOffsetForActiveObstacle(activeCm, posCm, sign);
+    agv.position.z = newZ;
+
+    const dxScene = Math.max(controller.getVelocityCmPerS() * dt * SCALE, 0.0001);
+    const dz = newZ - prevAgvZ;
+    const targetYaw = -Math.atan2(dz, dxScene) * 0.6;
+    agv.rotation.y += (targetYaw - agv.rotation.y) * Math.min(dt * 8, 1);
+    prevAgvZ = newZ;
+
+    document.getElementById('hud-time').innerText = controller.getSimTime().toFixed(2) + ' s';
+    document.getElementById('hud-pos').innerText = Math.max(posCm, 0).toFixed(1) + ' cm';
+    document.getElementById('hud-vel').innerText = controller.getVelocityCmPerS().toFixed(1) + ' cm/s';
+    document.getElementById('hud-dist').innerText = controller.getDistanceAheadCm().toFixed(1) + ' cm';
+
+    wheels.forEach(w => { w.rotation.x += controller.getVelocityCmPerS() * dt * 0.05; });
+  }
+
+  const color = stateColors[badgeText] || '#ffffff';
+  bodyMat.color.set(color);
+  document.getElementById('state-badge').innerText = badgeText;
+  document.getElementById('state-badge').style.background = color;
+  document.getElementById('state-badge').style.color = (badgeText === 'IDLE') ? '#fff' : '#0b0f14';
+
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>

@@ -102,7 +102,7 @@ python -m http.server 8000
 
 Then open `http://localhost:8000`
 
-**Live demo:** https://vishnu2305.github.io/agv-motion-controller/
+**Live demo:** https://agv-motion-controller.onrender.com/
 
 
 ## Sample output

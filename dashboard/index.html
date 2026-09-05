@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>AGV Motion Controller — Live Production Site Demo</title>
+<title>AGV Motion Controller — Live Production Site Demo (WASM)</title>
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; overflow: hidden; background: #05070a; font-family: 'Segoe UI', Arial, sans-serif; }
@@ -20,6 +20,7 @@
   #hud .row span:first-child { color: #7c8ba0; letter-spacing: 0.3px; }
   #hud .row span:last-child { font-variant-numeric: tabular-nums; font-weight: 500; }
   #state-badge { display: inline-block; padding: 3px 12px; border-radius: 20px; font-weight: 700; font-size: 11px; letter-spacing: 0.6px; }
+  #engine-tag { font-size: 10.5px; color: #55dd88; margin-top: 10px; letter-spacing: 0.4px; }
 
   #controls {
     position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%); z-index: 10;
@@ -48,6 +49,12 @@
     position: absolute; bottom: 22px; right: 24px; z-index: 10;
     color: #3a4a5e; font-size: 10.5px; letter-spacing: 1px; text-align: right;
   }
+  #loading-wasm {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    color: #7fd0ff; font-size: 13px; z-index: 30; letter-spacing: 0.5px;
+    background: rgba(10,14,20,0.9); padding: 14px 22px; border-radius: 8px;
+    border: 1px solid rgba(127,208,255,0.3);
+  }
 </style>
 </head>
 <body>
@@ -61,12 +68,13 @@
   <div class="row"><span>Velocity</span><span id="hud-vel">0.0 cm/s</span></div>
   <div class="row"><span>Distance Ahead</span><span id="hud-dist">-- cm</span></div>
   <div class="row"><span>Obstacles Placed</span><span id="hud-obstacles">0</span></div>
+  <div id="engine-tag">● Engine: compiled C++ (WebAssembly)</div>
 </div>
 
 <div id="instruction">
   <b>1.</b> Click START to load goods onto the AGV.<br>
   <b>2.</b> Click RUN to dispatch it toward the dock.<br>
-  <b>3.</b> While it's <b>MOVING</b>, click anywhere on the track ahead of it to drop an obstacle live — it will detect it early, stop, then smoothly curve around it (alternating right/left each time) and resume automatically.
+  <b>3.</b> While it's MOVING, click anywhere on the track ahead of it to drop an obstacle live — the compiled C++ state machine detects it, stops, curves around it (alternating sides), and resumes automatically.
 </div>
 
 <div id="controls">
@@ -75,9 +83,12 @@
   <button class="btn reset" id="btn-reset">🔄 RESET</button>
 </div>
 
-<div id="title-bar">MURATA MACHINERY — PORTFOLIO PROJECT<br>Live Software-in-the-Loop Simulation</div>
+<div id="title-bar">MURATA MACHINERY — PORTFOLIO PROJECT<br>C++ Control Logic Compiled to WebAssembly</div>
+
+<div id="loading-wasm">Loading compiled C++ module (WebAssembly)...</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="agv.js"></script>
 <script>
 // =================================================================
 // SCENE SETUP
@@ -110,9 +121,7 @@ sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.camera.left = -60; sun.shadow.camera.right = 60;
 sun.shadow.camera.top = 60; sun.shadow.camera.bottom = -60;
 scene.add(sun);
-const rim = new THREE.DirectionalLight(0x4488ff, 0.35);
-rim.position.set(-30, 20, -30);
-scene.add(rim);
+scene.add(new THREE.DirectionalLight(0x4488ff, 0.35));
 
 function makeStripeTexture() {
   const c = document.createElement('canvas');
@@ -141,7 +150,7 @@ scene.add(new THREE.GridHelper(220, 44, 0x22344a, 0x151f2c));
 // =================================================================
 // TRACK
 // =================================================================
-const SCALE = 0.1; // cm -> scene units
+const SCALE = 0.1;
 const TRACK_LENGTH_CM = 500;
 
 const rail = new THREE.Mesh(
@@ -152,7 +161,6 @@ rail.position.set(TRACK_LENGTH_CM * SCALE / 2, 0.08, 0);
 rail.castShadow = true; rail.receiveShadow = true;
 scene.add(rail);
 
-// faint bypass lanes either side, purely a visual cue for where reroutes happen
 [-1.8, 1.8].forEach(zOff => {
   const lane = new THREE.Mesh(
     new THREE.BoxGeometry(TRACK_LENGTH_CM * SCALE, 0.02, 1.2),
@@ -162,9 +170,6 @@ scene.add(rail);
   scene.add(lane);
 });
 
-// =================================================================
-// DOCK at end of track
-// =================================================================
 function buildDock(positionCm) {
   const group = new THREE.Group();
   const platform = new THREE.Mesh(
@@ -186,9 +191,6 @@ function buildDock(positionCm) {
 }
 buildDock(TRACK_LENGTH_CM);
 
-// =================================================================
-// GOODS STACK + AGV cargo slot
-// =================================================================
 const goodsMeshes = [];
 for (let i = 0; i < 3; i++) {
   const box = new THREE.Mesh(
@@ -201,9 +203,6 @@ for (let i = 0; i < 3; i++) {
   goodsMeshes.push(box);
 }
 
-// =================================================================
-// AGV MODEL
-// =================================================================
 const agv = new THREE.Group();
 const bodyMat = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.35, roughness: 0.4 });
 const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.45, 0.9), bodyMat);
@@ -225,13 +224,9 @@ const wheels = [];
   agv.add(wheel);
   wheels.push(wheel);
 });
-agv.position.set(-4, 0.42 - 0.42, 0); // will be repositioned properly below
 agv.position.set(-4, 0, 0);
 scene.add(agv);
 
-// =================================================================
-// BACKGROUND FLAVOR: trucks, racking, crane
-// =================================================================
 function buildTruck(x, z, color) {
   const truck = new THREE.Group();
   const cab = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.4, 1.6), new THREE.MeshStandardMaterial({ color }));
@@ -281,13 +276,12 @@ craneGroup.position.set(42, 0, -6);
 scene.add(craneGroup);
 
 // =================================================================
-// LIVE OBSTACLE PLACEMENT (click on the floor near the track)
+// OBSTACLE VISUALS (order-matched with C++ addObstacle() calls)
 // =================================================================
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 const clickPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-
-let liveObstacles = []; // { cm, group, bypassed }
+let obstacleVisuals = []; // { cm, group } -- purely visual; C++ owns the real obstacle list
 
 function buildCrateObstacle(positionCm) {
   const group = new THREE.Group();
@@ -311,8 +305,25 @@ function buildCrateObstacle(positionCm) {
   return group;
 }
 
+// =================================================================
+// LOAD THE COMPILED C++ MODULE (WebAssembly)
+// =================================================================
+let controller = null;
+let moduleReady = false;
+
+createAGVModule().then((Module) => {
+  controller = new Module.LiveController(TRACK_LENGTH_CM);
+  moduleReady = true;
+  document.getElementById('loading-wasm').style.display = 'none';
+  console.log('Compiled C++ LiveController loaded via WebAssembly.');
+}).catch((err) => {
+  document.getElementById('loading-wasm').innerText = 'Failed to load agv.wasm — check console (F12).';
+  console.error(err);
+});
+
 renderer.domElement.addEventListener('click', (event) => {
-  if (sim.state !== 'MOVING') return; // only allow placing while actively cruising, not mid-reroute
+  if (!moduleReady || dashboardPhase !== 'RUNNING') return;
+  if (controller.getStateName() !== 'MOVING') return;
 
   mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
   mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
@@ -321,149 +332,36 @@ renderer.domElement.addEventListener('click', (event) => {
   if (!raycaster.ray.intersectPlane(clickPlane, hit)) return;
 
   const clickedCm = hit.x / SCALE;
-  const minCm = sim.positionCm + 60;   // needs room ahead to detect + curve smoothly
+  const minCm = controller.getPositionCm() + 60;
   const maxCm = TRACK_LENGTH_CM - 20;
   if (clickedCm < minCm || clickedCm > maxCm) return;
 
+  controller.addObstacle(clickedCm); // <-- real compiled C++ call
   const group = buildCrateObstacle(clickedCm);
-  liveObstacles.push({ cm: clickedCm, group, bypassed: false });
-  document.getElementById('hud-obstacles').innerText = liveObstacles.length;
+  obstacleVisuals.push({ cm: clickedCm, group });
+  document.getElementById('hud-obstacles').innerText = obstacleVisuals.length;
 });
 
 // =================================================================
-// LIVE STATE MACHINE (JS port of AGVController.cpp) + curved reroute
+// DASHBOARD-SIDE PHASE (goods loading is presentation-only, not
+// part of the compiled control logic -- the real C++ state machine
+// only begins once RUN triggers controller.requestStart())
 // =================================================================
-const sim = {
-  state: 'IDLE',
-  positionCm: -40,
-  velocityCmPerS: 0,
-  stateElapsedS: 0,
-  simTimeS: 0,
-  targetDistanceCm: TRACK_LENGTH_CM,
-  currentObstacle: null,   // obstacle just detected, awaiting reroute start
-  activeObstacle: null,    // obstacle currently being curved around
-  bypassSign: 1,           // +1 = curve right, -1 = curve left
-  lastBypassSign: -1,      // used to alternate sides each time
-};
+let dashboardPhase = 'IDLE'; // IDLE -> GOODS_LOADING -> READY -> RUNNING
 
-const DOCK_THRESHOLD_CM   = 15;   // how close counts as "arrived"
-const DETECT_AHEAD_CM     = 45;   // detect obstacles this far in advance (gives room to curve smoothly)
-const ZONE_HALF_WIDTH_CM  = 45;   // the S-curve spans obstacle.cm ± this, symmetric
-const LATERAL_OFFSET      = 1.7;  // scene units, peak sideways offset while bypassing
-const MAX_SPEED_CM_PER_S  = 45;
-const REROUTE_SPEED_CM_PER_S = MAX_SPEED_CM_PER_S * 0.8;
-
-function transitionTo(next, reason) {
-  console.log(`[${sim.simTimeS.toFixed(2)}s] ${sim.state} -> ${next}  (${reason})`);
-  sim.state = next;
-  sim.stateElapsedS = 0;
-}
-
-function nearestObstacleAheadCm() {
-  let best = Infinity, bestEntry = null;
-  for (const obs of liveObstacles) {
-    if (obs.bypassed) continue;
-    if (obs.cm >= sim.positionCm) {
-      const d = obs.cm - sim.positionCm;
-      if (d < best) { best = d; bestEntry = obs; }
-    }
-  }
-  return { distance: best, entry: bestEntry };
-}
-
-// Smooth symmetric S-curve: 0 at the zone edges, peak LATERAL_OFFSET at the
-// obstacle's own position, computed purely from where the AGV physically IS
-// right now — not from a separate timer — so it can never desync into a "jump".
-function lateralOffsetForObstacle(obs, positionCm, sign) {
-  const rel = positionCm - obs.cm;
-  if (rel < -ZONE_HALF_WIDTH_CM || rel > ZONE_HALF_WIDTH_CM) return 0;
-  const t = (rel + ZONE_HALF_WIDTH_CM) / (2 * ZONE_HALF_WIDTH_CM); // 0..1
-  return sign * LATERAL_OFFSET * Math.sin(Math.PI * t);
-}
-
-function simUpdate(dt) {
-  sim.simTimeS += dt;
-  sim.stateElapsedS += dt;
-
-  switch (sim.state) {
-    case 'IDLE':
-    case 'GOODS_LOADING':
-    case 'READY':
-      break;
-
-    case 'PATH_PLANNING':
-      if (sim.stateElapsedS >= 0.3) {
-        sim.velocityCmPerS = MAX_SPEED_CM_PER_S;
-        transitionTo('MOVING', 'path computed, dispatching motion');
-      }
-      break;
-
-    case 'MOVING': {
-      const distToDock = sim.targetDistanceCm - sim.positionCm;
-      const { distance: distToObstacle, entry } = nearestObstacleAheadCm();
-
-      if (distToDock <= DOCK_THRESHOLD_CM && distToDock <= distToObstacle) {
-        sim.velocityCmPerS = 0;
-        transitionTo('DOCKED', 'reached target position');
-        break;
-      }
-      if (distToObstacle <= DETECT_AHEAD_CM) {
-        sim.velocityCmPerS = 0;
-        sim.currentObstacle = entry;
-        transitionTo('OBSTACLE_DETECTED', `obstacle detected ${distToObstacle.toFixed(0)}cm ahead`);
-        break;
-      }
-      sim.positionCm += sim.velocityCmPerS * dt;
-      break;
-    }
-
-    case 'OBSTACLE_DETECTED':
-      // brief stop to "assess" before committing to a reroute — matches
-      // the real controller's debounce pause
-      if (sim.stateElapsedS >= 0.3) {
-        sim.bypassSign = -sim.lastBypassSign;   // alternate: right, left, right, left...
-        sim.lastBypassSign = sim.bypassSign;
-        sim.activeObstacle = sim.currentObstacle;
-        sim.velocityCmPerS = REROUTE_SPEED_CM_PER_S;
-        transitionTo('REROUTING', `curving ${sim.bypassSign > 0 ? 'right' : 'left'} around obstacle`);
-      }
-      break;
-
-    case 'REROUTING': {
-      sim.positionCm += sim.velocityCmPerS * dt;
-      const rel = sim.positionCm - sim.activeObstacle.cm;
-      if (rel > ZONE_HALF_WIDTH_CM) {
-        sim.activeObstacle.bypassed = true;
-        sim.activeObstacle = null;
-        sim.velocityCmPerS = MAX_SPEED_CM_PER_S;
-        transitionTo('MOVING', 'reroute complete, back on straight path');
-      }
-      break;
-    }
-
-    case 'DOCKED':
-    case 'ERROR':
-      sim.velocityCmPerS = 0;
-      break;
-  }
-}
-
-// =================================================================
-// UI BUTTONS
-// =================================================================
 const btnStart = document.getElementById('btn-start');
 const btnRun = document.getElementById('btn-run');
 const btnReset = document.getElementById('btn-reset');
 
 btnStart.addEventListener('click', () => {
-  if (sim.state !== 'IDLE') return;
-  transitionTo('GOODS_LOADING', 'loading goods onto AGV');
+  if (dashboardPhase !== 'IDLE' || !moduleReady) return;
+  dashboardPhase = 'GOODS_LOADING';
   btnStart.disabled = true;
 
   let i = 0;
   const loadNext = () => {
     if (i >= goodsMeshes.length) {
-      transitionTo('READY', 'goods loaded, ready to dispatch');
+      dashboardPhase = 'READY';
       btnRun.disabled = false;
       return;
     }
@@ -485,9 +383,10 @@ btnStart.addEventListener('click', () => {
 });
 
 btnRun.addEventListener('click', () => {
-  if (sim.state !== 'READY') return;
+  if (dashboardPhase !== 'READY' || !moduleReady) return;
   btnRun.disabled = true;
-  transitionTo('PATH_PLANNING', 'dispatch command received');
+  controller.requestStart(); // <-- hands off to the real compiled C++ state machine
+  dashboardPhase = 'RUNNING';
 });
 
 btnReset.addEventListener('click', () => window.location.reload());
@@ -499,6 +398,20 @@ const stateColors = {
   IDLE: '#888888', GOODS_LOADING: '#ffcc55', READY: '#7fd0ff', PATH_PLANNING: '#ffaa33',
   MOVING: '#33cc66', OBSTACLE_DETECTED: '#ff4444', REROUTING: '#cc66ff', DOCKED: '#44ddff', ERROR: '#ff0000'
 };
+
+// Visual-only curve shaping constants -- these must stay in sync with the
+// ZONE_HALF_WIDTH_CM / peak offset used in LiveController.cpp for the curve
+// to look continuous with where C++ actually starts/ends the reroute zone.
+const ZONE_HALF_WIDTH_CM = 45;
+const LATERAL_OFFSET = 1.7;
+
+function lateralOffsetForActiveObstacle(activeCm, positionCm, sign) {
+  if (activeCm < 0 || sign === 0) return 0;
+  const rel = positionCm - activeCm;
+  if (rel < -ZONE_HALF_WIDTH_CM || rel > ZONE_HALF_WIDTH_CM) return 0;
+  const t = (rel + ZONE_HALF_WIDTH_CM) / (2 * ZONE_HALF_WIDTH_CM);
+  return sign * LATERAL_OFFSET * Math.sin(Math.PI * t);
+}
 
 let camAngle = 0.6;
 const clock = new THREE.Clock();
@@ -521,43 +434,48 @@ function animate() {
       obj.userData.beacon.material.emissiveIntensity = 0.4 + Math.abs(Math.sin(clock.elapsedTime * 4)) * 0.9;
     }
   });
-  liveObstacles.forEach(o => {
+  obstacleVisuals.forEach(o => {
     if (o.group.scale.x < 1) {
       const s = Math.min(o.group.scale.x + dt * 4, 1);
       o.group.scale.set(s, s, s);
     }
   });
 
-  simUpdate(dt);
+  let badgeText = dashboardPhase;
+  let posCm = -4;
 
-  agv.position.x = sim.positionCm * SCALE;
+  if (moduleReady && dashboardPhase === 'RUNNING') {
+    controller.update(dt); // <-- advances the REAL compiled C++ state machine
 
-  // lateral offset is a pure function of current position — continuous by construction
-  const newZ = sim.activeObstacle
-    ? lateralOffsetForObstacle(sim.activeObstacle, sim.positionCm, sim.bypassSign)
-    : 0;
-  agv.position.z = newZ;
+    badgeText = controller.getStateName();
+    posCm = controller.getPositionCm();
 
-  // heading: face the direction of actual travel (numeric derivative of the curve)
-  const dxScene = Math.max(sim.velocityCmPerS * dt * SCALE, 0.0001);
-  const dz = newZ - prevAgvZ;
-  const targetYaw = -Math.atan2(dz, dxScene) * 0.6; // damped for a natural, not twitchy, turn
-  agv.rotation.y += (targetYaw - agv.rotation.y) * Math.min(dt * 8, 1);
-  prevAgvZ = newZ;
+    agv.position.x = posCm * SCALE;
 
-  const color = stateColors[sim.state] || '#ffffff';
+    const activeCm = controller.getActiveObstacleCm();
+    const sign = controller.getBypassSign();
+    const newZ = lateralOffsetForActiveObstacle(activeCm, posCm, sign);
+    agv.position.z = newZ;
+
+    const dxScene = Math.max(controller.getVelocityCmPerS() * dt * SCALE, 0.0001);
+    const dz = newZ - prevAgvZ;
+    const targetYaw = -Math.atan2(dz, dxScene) * 0.6;
+    agv.rotation.y += (targetYaw - agv.rotation.y) * Math.min(dt * 8, 1);
+    prevAgvZ = newZ;
+
+    document.getElementById('hud-time').innerText = controller.getSimTime().toFixed(2) + ' s';
+    document.getElementById('hud-pos').innerText = Math.max(posCm, 0).toFixed(1) + ' cm';
+    document.getElementById('hud-vel').innerText = controller.getVelocityCmPerS().toFixed(1) + ' cm/s';
+    document.getElementById('hud-dist').innerText = controller.getDistanceAheadCm().toFixed(1) + ' cm';
+
+    wheels.forEach(w => { w.rotation.x += controller.getVelocityCmPerS() * dt * 0.05; });
+  }
+
+  const color = stateColors[badgeText] || '#ffffff';
   bodyMat.color.set(color);
-  wheels.forEach(w => { w.rotation.x += sim.velocityCmPerS * dt * 0.05; });
-
-  document.getElementById('state-badge').innerText = sim.state;
+  document.getElementById('state-badge').innerText = badgeText;
   document.getElementById('state-badge').style.background = color;
-  document.getElementById('state-badge').style.color = (sim.state === 'IDLE') ? '#fff' : '#0b0f14';
-  document.getElementById('hud-time').innerText = sim.simTimeS.toFixed(2) + ' s';
-  document.getElementById('hud-pos').innerText = Math.max(sim.positionCm, 0).toFixed(1) + ' cm';
-  document.getElementById('hud-vel').innerText = sim.velocityCmPerS.toFixed(1) + ' cm/s';
-  const { distance } = nearestObstacleAheadCm();
-  const distToDock = sim.targetDistanceCm - sim.positionCm;
-  document.getElementById('hud-dist').innerText = Math.min(distance, distToDock).toFixed(1) + ' cm';
+  document.getElementById('state-badge').style.color = (badgeText === 'IDLE') ? '#fff' : '#0b0f14';
 
   renderer.render(scene, camera);
 }

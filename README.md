@@ -19,6 +19,27 @@ so the same control logic is portable to real STM32/Arduino hardware.
 | Version control | Git / GitHub |
 | Hosting | GitHub Pages |
 
+
+## How the dashboard connects to the C++ engine
+
+The interactive 3D dashboard is not a separate reimplementation — it is driven
+directly by the same C++ control logic used in the CLI simulation
+(`src/AGVController.cpp`), compiled to WebAssembly via Emscripten
+(`wasm/LiveController.cpp`, `wasm/bindings.cpp`).
+
+- `emcc`/`em++` compiles the C++ into `dashboard/agv.wasm` + `dashboard/agv.js`
+- The browser calls into that compiled module directly (`controller.update(dt)`,
+  `controller.addObstacle(cm)`, etc.) every animation frame
+- JavaScript/Three.js is responsible **only** for rendering and camera —
+  every state transition, obstacle detection, and reroute decision happens
+  inside the compiled C++ code
+
+**Recompile after changing the C++ logic:**
+```
+cd wasm
+em++ -std=c++17 -I. ../src/AGVController.cpp LiveController.cpp bindings.cpp --bind -s MODULARIZE=1 -s EXPORT_NAME="createAGVModule" -s ENVIRONMENT=web -O2 -o ../dashboard/agv.js
+```
+
 ## Screenshots
 
 | Live Dashboard | Obstacle Detection & Reroute |

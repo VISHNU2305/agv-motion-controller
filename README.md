@@ -56,4 +56,3 @@ python plot_run.py
 Swap the `sim/` implementations for real HAL implementations targeting an
 STM32 or Arduino (PWM motor driver, HC-SR04 echo timing, encoder interrupt
 counting) — the `AGVController` class requires no changes.
-

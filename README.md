@@ -5,6 +5,26 @@ a fixed rail, detecting obstacles, and rerouting around them — built as a
 software-in-the-loop (SIL) simulation with a hardware-abstraction layer (HAL)
 so the same control logic is portable to real STM32/Arduino hardware.
 
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Control logic (core simulation) | C++17 |
+| Control logic (live browser demo) | JavaScript (1:1 port of the C++ state machine) |
+| 3D rendering | Three.js (WebGL) |
+| Compiler / toolchain | g++ (MinGW-w64 via MSYS2) |
+| Data visualization | Python, matplotlib, pandas |
+| UML modeling | PlantUML |
+| Version control | Git / GitHub |
+| Hosting | GitHub Pages |
+
+## Screenshots
+
+| Live Dashboard | Obstacle Detection & Reroute |
+|---|---|
+| ![Dashboard](screenshots/dashboard.png) | ![Obstacle Detected](screenshots/screenshot-obstacle.png) |
+
 ## Why software-in-the-loop
 The `hal/` interfaces (`IMotorDriver`, `IDistanceSensor`, `IEncoder`) are
 implemented against a virtual physics model (`sim/SimWorld.h`) instead of real
@@ -40,6 +60,29 @@ cd visualizer
 pip install matplotlib pandas
 python plot_run.py
 ![Run Plot](visualizer/run_plot.png)
+
+
+## Live interactive 3D dashboard
+A browser-based 3D visualization simulating a production-floor AGV dispatch
+scenario, built with Three.js. Unlike the CSV replay above, this version runs
+a JavaScript port of the same state machine live in the browser and lets you
+place obstacles interactively.
+
+**Flow:**
+1. Click **START** — goods load onto the AGV
+2. Click **RUN** — AGV dispatches toward the dock
+3. Click anywhere on the track while it's moving — drops an obstacle live
+4. AGV detects it, stops, curves around it (alternating sides each time), and resumes automatically
+5. Repeat step 3 as many times as you like before it reaches the dock
+
+**Run locally:**
+cd dashboard
+python -m http.server 8000
+
+Then open `http://localhost:8000`
+
+**Live demo:** https://vishnu2305.github.io/agv-motion-controller/
+
 
 ## Sample output
 
